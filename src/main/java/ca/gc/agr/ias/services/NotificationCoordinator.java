@@ -42,32 +42,23 @@ public class NotificationCoordinator {
     {
         EventHandler handler;
         logger.debug("subscribe method invoked.");
-        synchronized(this) 
+        
+        handler = handlerMap.computeIfAbsent(partyId, (k) -> 
         {
-            logger.debug("Acquiring the handler.");
-            handler = handlerMap.computeIfAbsent(partyId, (k) -> 
+            EventHandler innerHandler = new EventHandler();
+            try 
             {
-                EventHandler innerHandler = new EventHandler();
-                try 
-                {
-                    logger.debug("Attempting to add a new EventHandler to the EventRunner.");
-                    runner.addHandler(innerHandler); 
-                }
-                catch (InterruptedException e)
-                {
-                    logger.debug("InterruptionException thrown, I guess this is it.");
-                    return null;
-                }
-                return innerHandler;
-            });
-
-            if (handler.isSinkClosed())
-            {
-                handler.setSink(new SseEmitter());
+                logger.debug("Attempting to add a new EventHandler to the EventRunner.");
+                runner.addHandler(innerHandler); 
             }
+            catch (InterruptedException e)
+            {
+                logger.debug("InterruptionException thrown, I guess this is it.");
+                return null;
+            }
+            return innerHandler;
+        });
 
-
-        }
         logger.debug("Handler found; returning.");
         // if (!handler.isAlive())
         // {

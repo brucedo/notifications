@@ -25,9 +25,14 @@ public class EventHandler {
     private final AtomicBoolean complete = new AtomicBoolean(false);
     private final AtomicLong msgId = new AtomicLong(0);
 
-    private final AtomicInteger publisherCount = new AtomicInteger(0);
-
     private BlockingQueue<Message> source = new ArrayBlockingQueue<>(50);
+
+    // ***
+    private Semaphore stateLock = new Semaphore(1);
+    private final AtomicInteger publisherCount;
+    // It's uncertain that emitter lives is necessary...
+    private final AtomicBoolean emitterLives;
+    private final AtomicBoolean emitterUsed;
 
     public EventHandler()
     {
@@ -35,11 +40,37 @@ public class EventHandler {
         logger.debug("Timeout of the emitter: {}", sink.getTimeout());
         source = new LinkedBlockingQueue<>();
         sink.onCompletion(this::setComplete);
+
+        this.publisherCount = new AtomicInteger(0);
+        this.emitterLives = new AtomicBoolean();
+        this.emitterLives.set(true);
+        this.emitterUsed = new AtomicBoolean();
+        this.emitterUsed.set(false);
     }
 
     public void setComplete()
     {
         this.complete.set(true);
+        this.emitterLives.set(false);
+        resetSseEmitter();
+        this.emitterLives.set(true);
+        
+        
+    }
+
+    private void resetSseEmitter()
+    {
+        try
+        {
+            this.sinkLock.acquire();
+            this.sink = new SseEmitter(-1L);
+            this.sinkLock.release();
+            this.emitterUsed.set(false);
+        }
+        catch (InterruptedException e)
+        {
+            logger.debug("Interrupted exception caught - thread shutting down?");
+        }
     }
 
     public void poll() throws InterruptedException {
@@ -56,85 +87,57 @@ public class EventHandler {
         }
         logger.debug("Processing some message for output...");
 
-        preProcessMessage(msg);            
+        transmitMessage(msg);            
         
     }
 
     public boolean isAlive()
     {
-        return (!this.isSinkClosed() || this.publisherCount.get() > 0 || this.source.size() > 0);
+        return emitterLives.get();
     }
 
-    // Handle the special message cases.
-    private void preProcessMessage(Message msg) throws InterruptedException
+    public boolean isInUse()
     {
-        if (msg.messageName == null)
-        {
-            if (msg.msg instanceof String)
-            {
-                String special = (String)msg.msg;
-                if (special.startsWith("HELO"))
-                {
-                    this.publisherCount.getAndIncrement();
-                }
-                else if (special.startsWith("HUP"))
-                {
-                    this.publisherCount.decrementAndGet();
-                }
-            }
-        }
-        else
-        {
-            transmitMessage(msg);
-        }
+        return emitterUsed.get();
     }
+
 
     private void transmitMessage(Message msg) throws InterruptedException
     {
         SseEventBuilder builder = SseEmitter.event();
 
-        Long seq = msgId.getAndAdd(1);
-
         builder.name(msg.messageName);
         builder.data(msg.msg, MediaType.APPLICATION_JSON_UTF8);
-        builder.id("" + seq);
-
-        // This message may have had it's sequence set if send was tried before, and failed.
-        msg.seq = msg.seq == null ? seq : msg.seq;
+        msg.seq = msgId.getAndAdd(1);
+        builder.id("" + msg.seq);
 
         try 
         {
-            if (this.complete.get())
-                throw new IOException("Cannot send to completed stream.");
             sinkLock.acquire();
             this.sink.send(builder);
             sinkLock.release();
         }
         catch (IOException e)
         {
+            // if the send excepts, the release won't have happened.  Release the lock here.
+            sinkLock.release();
             // There may be some cause to check and evaluate here whether the SSE is dead or alive...
             logger.error("Unable to send message - IOExeception {}", e.getMessage());
-            source.add(msg);
+            resetSseEmitter();
+            // Try to resend after reset
+            try 
+            {
+                sinkLock.acquire();
+                this.sink.send(builder);
+                sinkLock.release();
+            }
+            catch (IOException f)
+            {
+                // If the second send attempt excepts, the release won't have happened.  Release here.
+                sinkLock.release();
+                logger.debug("Second try failed too - aborting.");
+            }
         }
-    }
-
-    public void setSink(SseEmitter sink) throws InterruptedException {
-
-        sinkLock.acquire();
-        this.sink = sink;
-        sinkLock.release();
-
-        // clear any backlog that has built while the sink was inaccessible.
-        while (!this.source.isEmpty())
-        {
-            preProcessMessage(source.poll());
-        }
-
-    }
-
-    public boolean isSinkClosed() 
-    {
-        return complete.get();
     }
 
     public SseEmitter getSink()
@@ -147,11 +150,26 @@ public class EventHandler {
         return source;
     }
 
-    public void setSource(BlockingQueue<Message> source) {
-        this.source = source;
+    public int addPublisher()
+    {
+        return this.publisherCount.incrementAndGet();
     }
 
-    
+    public int retirePublisher()
+    {
+        return this.publisherCount.decrementAndGet();
+    }
+
+    public void acquireStateLock()
+    throws InterruptedException
+    {
+        this.stateLock.acquire();
+    }
+
+    public void releaseStateLock()
+    {
+        this.stateLock.release();
+    }
     
     
 }
