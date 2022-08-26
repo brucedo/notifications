@@ -22,7 +22,6 @@ public class EventHandler {
     private volatile SseEmitter sink;
     private Semaphore sinkLock = new Semaphore(1);
 
-    private final AtomicBoolean complete = new AtomicBoolean(false);
     private final AtomicLong msgId = new AtomicLong(0);
 
     private BlockingQueue<Message> source = new ArrayBlockingQueue<>(50);
@@ -39,7 +38,7 @@ public class EventHandler {
         sink = new SseEmitter(-1L);
         logger.debug("Timeout of the emitter: {}", sink.getTimeout());
         source = new LinkedBlockingQueue<>();
-        sink.onCompletion(this::setComplete);
+        sink.onCompletion(() -> this.setComplete());
 
         this.publisherCount = new AtomicInteger(0);
         this.emitterLives = new AtomicBoolean();
@@ -50,12 +49,10 @@ public class EventHandler {
 
     public void setComplete()
     {
-        this.complete.set(true);
+        logger.debug("The SseEmitter has issued a callback to indicate the emitter is no longer sending.");
         this.emitterLives.set(false);
-        resetSseEmitter();
-        this.emitterLives.set(true);
-        
-        
+        this.emitterUsed.set(false);
+        // resetSseEmitter();
     }
 
     private void resetSseEmitter()
@@ -64,6 +61,7 @@ public class EventHandler {
         {
             this.sinkLock.acquire();
             this.sink = new SseEmitter(-1L);
+            sink.onCompletion(() -> this.setComplete());
             this.sinkLock.release();
             this.emitterUsed.set(false);
         }
@@ -73,22 +71,38 @@ public class EventHandler {
         }
     }
 
-    public void poll() throws InterruptedException {
+    public int poll() throws InterruptedException {
         
         Message msg;
 
-        logger.debug("EventHandler#poll() invoked.  Checking for messages...");
+        // logger.debug("EventHandler#poll() invoked.  Checking for messages...");
 
         msg = source.poll();
 
         if (msg == null)
         {
-            return;
+            return 0;
         }
-        logger.debug("Processing some message for output...");
-
-        transmitMessage(msg);            
+        // logger.debug("Processing some message for output...");
         
+        int count = 0;
+        while (msg != null)
+        {
+            transmitMessage(msg);
+            count += 1;
+            msg = source.poll();
+        }
+
+        return count;
+        
+    }
+
+    public void issueHeartbeat() throws InterruptedException
+    {
+        Message heartbeat = new Message();
+
+        heartbeat.messageName = "babump";
+        transmitMessage(heartbeat);
     }
 
     public boolean isAlive()
@@ -102,7 +116,7 @@ public class EventHandler {
     }
 
 
-    private void transmitMessage(Message msg) throws InterruptedException
+    private int transmitMessage(Message msg) throws InterruptedException
     {
         SseEventBuilder builder = SseEmitter.event();
 
@@ -113,6 +127,7 @@ public class EventHandler {
 
         try 
         {
+            logger.debug("Attempting to send message with name {}", msg.messageName);
             sinkLock.acquire();
             this.sink.send(builder);
             sinkLock.release();
@@ -138,10 +153,13 @@ public class EventHandler {
                 logger.debug("Second try failed too - aborting.");
             }
         }
+
+        return 1;
     }
 
     public SseEmitter getSink()
     {
+        this.emitterUsed.set(true);
         return this.sink;
 
     }

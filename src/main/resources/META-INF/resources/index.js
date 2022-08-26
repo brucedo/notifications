@@ -3,8 +3,9 @@
 function startActivity() 
 {
     console.log("event handler fired.");
+    let partyId = document.getElementById("partyIdStart").value;
     let req = new XMLHttpRequest();
-    req.open("POST", "/notification/start/0");
+    req.open("POST", "/notification/start/" + partyId);
 
     req.onload = () => {
         let outtext = document.getElementById("output");
@@ -17,9 +18,15 @@ function startActivity()
 function subscribe()
 {
     console.log("Subscribe event handler fired.");
-    let sse = new EventSource("/notification/subscribe/0");
+    partyId = document.getElementById("subscribeIdStart").value;
+    let sse = new EventSource("/notification/subscribe/" + partyId);
 
-    sse.addEventListener("counter", (event) => {console.log("Message triggered counter event.");})
+    sse.addEventListener("counter", (event) => 
+    {
+        console.log("Message triggered counter event.");
+        let outtext = document.getElementById("output");
+        outtext.innerHTML = outtext.innerHTML + "\n" + event.data;
+    })
 
     sse.onmessage = (event) => {
         let outtext = document.getElementById("output");

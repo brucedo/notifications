@@ -4,6 +4,8 @@ import java.time.LocalDateTime;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.List;
+import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.Semaphore;
 
 
@@ -15,12 +17,9 @@ public class EventRunner implements Runnable
 
     private final Logger logger = LoggerFactory.getLogger(EventRunner.class);
 
-    private ArrayList<EventHandler> handlers = new ArrayList<>();
+    private ConcurrentLinkedQueue<EventBundle> handlers = new ConcurrentLinkedQueue<>();
 
-    // New EventHandlers given to EventRunner are placed here; processing begins after they are merged into the main set.
-    private ArrayList<EventHandler> mergeQueue = new ArrayList<>();
-    private Semaphore mergeQLock = new Semaphore(1);
-
+    // Statistics for this runner
     private volatile double secondsPerPass;
     private volatile double secondsBetweenHandlers;
 
@@ -36,20 +35,24 @@ public class EventRunner implements Runnable
         // infinite loop.
         while (true)
         {
-            // logger.debug("Taking another spin through the message queue.");
-            LocalDateTime start = LocalDateTime.now();
             try 
             {
-                for (EventHandler handler : handlers)
+                LocalDateTime start = LocalDateTime.now();
+                logger.debug("There are {} handlers waiting for processing.", handlers.size());
+                for (EventBundle handler : handlers)
                 {
-                    
                     handler.poll();
+                    logger.debug("Last datetime a message was sent: {}", handler.getLastTimeSent());
+                    if (handler.getLastTimeSent().isBefore(LocalDateTime.now().minusSeconds(30)))
+                    {
+                        handler.issueHeartbeat();
+                    }
                 }
-            
+
+                
                 LocalDateTime end = LocalDateTime.now();
 
                 // Update statistics.
-                window[windex] = (double)(LocalDateTime.from(start).until(end, ChronoUnit.MILLIS)) / 1000.00D;
 
                 if (windex % window.length == 0)
                 {
@@ -60,7 +63,7 @@ public class EventRunner implements Runnable
 
                 // Ask the thread to block for a bit if the turnaround time was very quick so it's not just spinning
                 // doing nothing.
-                if (window[windex] < 100)
+                if (LocalDateTime.from(start).until(end, ChronoUnit.MILLIS) < 100)
                 {
                     Thread.sleep(500);
                 }
@@ -72,17 +75,6 @@ public class EventRunner implements Runnable
             }
 
             windex = (windex + 1) % window.length ;
-
-            try
-            {
-                mergeNewHandlers();
-            }
-            catch (InterruptedException e)
-            {
-                logger.error("InterruptedException received while holding lock to merge new handlers.");
-                quit = true;
-                break;
-            }
         }
     }
 
@@ -96,31 +88,14 @@ public class EventRunner implements Runnable
         return this.getSecondsBetweenHandlers();
     }
 
-    public void addHandler(EventHandler handler) throws InterruptedException
+    public void addHandler(EventHandler handler)
     {
-        mergeQLock.acquire();
-        logger.debug("Adding new handler for pickup...");
-        this.mergeQueue.add(handler);
-        mergeQLock.release();
+        handlers.add(new EventBundle(handler));
     }
 
-    private void mergeNewHandlers() throws InterruptedException
+    public void retireEventHandler(EventHandler toRemove)
     {
-        mergeQLock.acquire();
-        if (mergeQueue.size() > 0)
-        {
-            logger.debug("Adding new set of EventHandlers for running.");
-        }
-        handlers.addAll(mergeQueue);
-        mergeQueue.clear();
-        mergeQLock.release();
-    }
-
-    public void retireEventHandler(EventHandler toRemove) throws InterruptedException
-    {
-        mergeQLock.acquire();
-        handlers.remove(toRemove);
-        mergeQLock.release();
+        handlers.removeIf((t)-> t.getHandler() == toRemove);
     }
     
 }

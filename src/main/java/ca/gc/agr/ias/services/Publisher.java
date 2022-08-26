@@ -28,15 +28,10 @@ public class Publisher {
     {
         BlockingQueue<Message> pipe = coordinator.becomePublisher(partyId);
 
-        Message greet = new Message();
-        greet.msg = "HELO";
-        pipe.add(greet);
-
-
         CompletableFuture.runAsync(()->{
-            for (int i = 0; i < 100; i++)
+            for (int i = 0; i < 10; i++)
             {
-                logger.debug("Publishing a new event.");
+                // logger.debug("Publishing a new event.");
                 Message msg = new Message();
                 msg.messageName = "counter";
                 msg.msg = new Count().setCount(i).setOf(100);
@@ -53,8 +48,5 @@ public class Publisher {
             }
         });
 
-        Message signoff = new Message();
-        signoff.msg = "HUP";
-        pipe.add(signoff);
     }
 }

@@ -41,14 +41,6 @@ public class Demo {
     @GetMapping("/subscribe/{partyId}")
     public SseEmitter subscribe(@PathVariable Long partyId)
     {
-        try 
-        {
-            return coordinator.subscribe(partyId);
-        }
-        catch (InterruptedException e)
-        {
-            logger.debug("Interruption occurred during subscription process.");
-            return null;
-        }
+            return coordinator.subscribe(partyId);   
     }
 }
